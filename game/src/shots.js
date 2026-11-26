@@ -80,6 +80,18 @@ function approachStrip(flight, terrain, strip) {
 function flyToStrip(flight, terrain, strip) {
   const plane = flight.plane;
   const dist = Math.hypot(strip.x - plane.x, strip.z - plane.z);
+  const rad = (strip.heading * Math.PI) / 180;
+  const fx = Math.sin(rad);
+  const fz = -Math.cos(rad);
+  const ground = terrain.heightAt(strip.x, strip.z);
+  // Along the axis and across it: where the plane is relative to the runway
+  // centreline. The landing check needs |across| < width/2 (20 m on Green),
+  // so a plane tens of metres off the axis at short range cannot correct
+  // before it sails past the strip.
+  const along = (plane.x - strip.x) * fx + (plane.z - strip.z) * fz;
+  const rx = Math.cos(rad);
+  const rz = Math.sin(rad);
+  const lateral = (plane.x - strip.x) * rx + (plane.z - strip.z) * rz;
   // Aligned means the plane is FLYING along the runway axis, not merely
   // pointing at the strip: close in and off to the side, the bearing to the
   // centre is diagonal even on a perfect final, and judging by it sends
@@ -88,17 +100,33 @@ function flyToStrip(flight, terrain, strip) {
     ? strip.heading
     : strip.heading + 180;
   const misaligned = Math.abs(angleDiff(plane.heading, axis)) > 45;
+  // The join point: 800 m out along the axis, on the side the plane is
+  // coming from, so the run-in is along the runway.
+  const side = along > 0 ? 1 : -1;
+  const join = { x: strip.x + fx * 800 * side, y: ground + 80, z: strip.z + fz * 800 * side };
+  // Lateral-corridor gate: in the 700–900 m shell before the final, a plane
+  // that is off the centreline (more than ~60 m) or still turning onto the
+  // axis does NOT drift into the final — it goes back out to the join point
+  // ON the axis instead. The old code only joined when misaligned AND far
+  // out, so a plane that had turned onto the axis while still hundreds of
+  // metres off the centreline flew straight at the strip centre and sailed
+  // past it sideways; worse, at the misaligned boundary (heading error
+  // exactly 45°) the join and centre branches commanded opposite banks
+  // step by step, the bank lag averaged them to zero, and the heading froze
+  // while the plane flew away. The gate holds the join through that
+  // boundary (the lateral offset alone keeps it on), so the turn completes.
+  // The gate deliberately stops at 700 m: inside that, approachStrip owns
+  // the landing loop, and yanking the plane back out to the join every time
+  // it crosses the centreline or turns onto the axis blows the loop up
+  // into a racetrack that never lands (measured: the un-shelled gate
+  // regressed all three contracts).
+  if (dist >= 700 && dist < 900 && (Math.abs(lateral) > 60 || misaligned)) {
+    return steerToward(flight, terrain, join, 0.3, 50, false);
+  }
   // The join only happens far out: once the plane is inside 700 m it is
   // committed to the final, and a mid-approach detour just strands it low
   // next to the runway.
   if (dist > 700 && misaligned) {
-    const rad = (strip.heading * Math.PI) / 180;
-    const fx = Math.sin(rad);
-    const fz = -Math.cos(rad);
-    const ground = terrain.heightAt(strip.x, strip.z);
-    const along = (plane.x - strip.x) * fx + (plane.z - strip.z) * fz;
-    const side = along > 0 ? 1 : -1;
-    const join = { x: strip.x + fx * 800 * side, y: ground + 80, z: strip.z + fz * 800 * side };
     return steerToward(flight, terrain, join, 0.3, 50, false);
   }
   if (dist < 700) return approachStrip(flight, terrain, strip);
