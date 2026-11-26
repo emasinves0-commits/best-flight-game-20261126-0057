@@ -1,18 +1,19 @@
-// A working best-game-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. A starting point, not a winner: Block Dodger, a
-// plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a title screen,
-// score, lives and levels, game over and restart, flat colours and no sound. Build your own game
-// (any genre, any library you vendor under game/, or none), put your 3 or 4 PNG or JPEG screenshots
-// in screenshots/ (the first by name is the cover) and run it.
+// Merapi Airmail — entrypoint for the best-flight-game-20261126-0057 bounty.
+// The game is a bush-plane mail run over a volcanic archipelago at golden hour:
+// a hand-rolled mini-3D engine on a plain 2D canvas (no libraries, no network
+// requests), keyboard + mouse, synthesized WebAudio. One core loop — fly, thread
+// the rings, land to refuel — across three contracts: Ring Run (8 gold rings,
+// then home), Airmail (deliver mail to the Palm and Green island strips, then
+// home), and Storm Rescue (punch through the storm to the lighthouse strip in
+// 180 seconds). This file is the handover: it copies game/ and screenshots/
+// beside it into /output and writes /output/dossier.json, the summary the judge
+// reads, using the vendored make.fun library.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// Local preview: `node serve.ts`, then open http://localhost:8080 in a desktop browser.
+// Outside the grading container, set MAKEFUN_OUTPUT_DIR to stage the output elsewhere:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -25,10 +26,12 @@ cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
+// The caps below mirror the scorer's own gates (reference/gate.json). Only
+// text_max_bytes changes the dossier's byte count; the rest exist to refuse an
+// entry the scorer would refuse anyway — too many screenshots, or one too big;
+// a game folder with too many files, too many bytes, or a path that runs too
+// long. game/ is counted next to /output's own limits, together with its
+// screenshots/ and dossier.json.
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {
@@ -38,4 +41,33 @@ writeFileSync(
     game_max_bytes: 50331648,
     game_path_max_bytes: 1000,
   }),
+);
+
+// Handover summary: count what was staged and print it, so anyone running this
+// entrypoint can see at a glance that the game, its screenshots and the dossier
+// all made it into /output.
+function walkFiles(dir: string): { files: number; bytes: number } {
+  let files = 0;
+  let bytes = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = walkFiles(path);
+      files += sub.files;
+      bytes += sub.bytes;
+    } else if (entry.isFile()) {
+      files += 1;
+      bytes += statSync(path).size;
+    }
+  }
+  return { files, bytes };
+}
+
+const gameStats = walkFiles(join(out, 'game'));
+const shotCount = existsSync(join(out, 'screenshots'))
+  ? readdirSync(join(out, 'screenshots')).length
+  : 0;
+const dossierBytes = statSync(join(out, 'dossier.json')).size;
+console.log(
+  `Merapi Airmail staged in ${out}: ${gameStats.files} game files (${gameStats.bytes} bytes), ${shotCount} screenshots, dossier.json ${dossierBytes} bytes.`,
 );
