@@ -669,6 +669,7 @@ export function createRenderer(canvas, terrain) {
     // The contract goal and the live message under the strip.
     const contract = { rings: 'RING RUN', airmail: 'AIRMAIL', storm: 'STORM RESCUE' }[state.contract];
     text(`${contract}  •  SCORE ${state.score}`, FIELD.width / 2, 66, 16, PALETTE.text, 'center');
+    text('MERAPI AIRMAIL', FIELD.width - 24, 66, 15, PALETTE.muted, 'right');
     if (state.messageTime > 0 && state.message) {
       context.fillStyle = 'rgba(5, 8, 15, 0.6)';
       const w = context.measureText(state.message).width + 36;
