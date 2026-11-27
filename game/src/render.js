@@ -68,21 +68,55 @@ export function createRenderer(canvas, terrain) {
   const vertexCount = (GRID + 1) * (GRID + 1);
   const triBase = [];
   const triVerts = [];
-  function groundColor(h, slope, x, z) {
+  // Low sun from the west: facet shading from the triangle's own normal,
+  // so neighbouring triangles differ like real slopes instead of flat blocks.
+  const sunDir = (() => {
+    const s = [-0.8, 0.45, -0.25];
+    const len = Math.sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    return [s[0] / len, s[1] / len, s[2] / len];
+  })();
+  function facetLight(nx, ny, nz) {
+    return clamp(0.66 + 0.5 * (nx * sunDir[0] + ny * sunDir[1] + nz * sunDir[2]), 0.5, 1.12);
+  }
+  const BANDS = [
+    [0, PALETTE.sand],
+    [2.5, PALETTE.grass],
+    [26, PALETTE.jungle],
+    [90, PALETTE.rock],
+    [170, PALETTE.volcano],
+  ];
+  function groundColor(h, slope, x, z, light, seed) {
     const dx = x + 260;
     const dz = z + 1150;
     const volcanoD = Math.sqrt(dx * dx + dz * dz);
-    let base;
-    if (h < 2.5) base = hexToRgb(PALETTE.sand);
-    else if (h < 26) base = hexToRgb(PALETTE.grass);
-    else if (h < 90) base = hexToRgb(PALETTE.jungle);
-    else if (h < 170) base = hexToRgb(PALETTE.rock);
-    else base = hexToRgb(PALETTE.volcano);
+    // Smooth band edges: blend the two neighbouring band colours across
+    // ±4 m of each threshold instead of a hard step.
+    let base = hexToRgb(BANDS[BANDS.length - 1][1]);
+    for (let i = 0; i < BANDS.length; i += 1) {
+      if (h < BANDS[i][0]) {
+        base = hexToRgb(BANDS[Math.max(0, i - 1)][1]);
+        break;
+      }
+      if (i === BANDS.length - 1) base = hexToRgb(BANDS[i][1]);
+    }
+    for (let i = 1; i < BANDS.length; i += 1) {
+      const thr = BANDS[i][0];
+      if (Math.abs(h - thr) < 4) {
+        const t = (h - (thr - 4)) / 8;
+        base = mixColor(hexToRgb(BANDS[i - 1][1]), hexToRgb(BANDS[i][1]), t);
+      }
+    }
     if (volcanoD < 260) base = mixColor(base, hexToRgb(PALETTE.volcano), 0.55);
     if (volcanoD < 130) base = mixColor(base, hexToRgb(PALETTE.crater), 0.5);
-    // Steep ground shows rock; the low sun from the west shades the rest.
-    const shade = clamp(1 - slope * 0.9, 0.55, 1.1);
-    return [Math.round(base[0] * shade), Math.round(base[1] * shade), Math.round(base[2] * shade)];
+    // Facet light plus a whisper of slope darkening, then a deterministic
+    // per-triangle jitter so adjacent triangles never match exactly.
+    const shade = light * clamp(1 - slope * 0.35, 0.8, 1);
+    const jitter = 0.97 + (((seed * 2654435761) % 1000) / 1000) * 0.06;
+    return [
+      Math.round(base[0] * shade * jitter),
+      Math.round(base[1] * shade * jitter),
+      Math.round(base[2] * shade * jitter),
+    ];
   }
   for (let gz = 0; gz < GRID; gz += 1) {
     for (let gx = 0; gx < GRID; gx += 1) {
@@ -102,8 +136,29 @@ export function createRenderer(canvas, terrain) {
       const avgH = (hA + hB + hC + hD) / 4;
       const avgX = x0 + step / 2;
       const avgZ = z0 + step / 2;
+      // Each triangle gets its own facet normal (cross of its two edges,
+      // flipped up-facing) — the two halves of a quad can face differently.
+      const norm = (x, y, z) => {
+        const len = Math.sqrt(x * x + y * y + z * z) || 1;
+        const sy = y < 0 ? -1 : 1;
+        return [sy * x / len, sy * y / len, sy * z / len];
+      };
+      const n1 = norm(
+        step * (hB - hA),
+        -step * step,
+        step * (hD - hA) - step * (hB - hA),
+      );
+      const n2 = norm(
+        step * (hD - hA) - step * (hC - hA),
+        -step * step,
+        step * (hC - hA),
+      );
+      const seedBase = triVerts.length;
       triVerts.push([a, b, d], [a, d, c]);
-      triBase.push(groundColor(avgH, slope, avgX, avgZ), groundColor(avgH, slope, avgX, avgZ));
+      triBase.push(
+        groundColor(avgH, slope, avgX, avgZ, facetLight(n1[0], n1[1], n1[2]), seedBase),
+        groundColor(avgH, slope, avgX, avgZ, facetLight(n2[0], n2[1], n2[2]), seedBase + 1),
+      );
     }
   }
   const triCount = triVerts.length;
@@ -135,13 +190,20 @@ export function createRenderer(canvas, terrain) {
   }
 
   /** Move the chase camera toward its target behind the plane. */
-  function updateCamera(plane, dt) {
+  function updateCamera(plane, dt, screen) {
     const hRad = plane.heading * DEG;
     const fx = Math.sin(hRad);
     const fz = -Math.cos(hRad);
-    const tx = plane.x - fx * 30;
-    const ty = plane.y + 8.5;
-    const tz = plane.z - fz * 30;
+    // The title screen is an establishing shot: pulled further back and
+    // higher, so the home runway reads from the bottom edge to the horizon
+    // instead of vanishing behind the camera plane (the old 30 m / +8.5 m
+    // chase put the strip's near end behind the lens and the foreground
+    // showed bare sea).
+    const behind = screen === SCREEN_TITLE ? 48 : 30;
+    const above = screen === SCREEN_TITLE ? 30 : 8.5;
+    const tx = plane.x - fx * behind;
+    const ty = plane.y + above;
+    const tz = plane.z - fz * behind;
     if (!camera.ready) {
       camera.x = tx;
       camera.y = ty;
@@ -199,13 +261,18 @@ export function createRenderer(canvas, terrain) {
   function drawSky(plane, storm) {
     const grad = context.createLinearGradient(0, 0, 0, FIELD.height * 0.62);
     if (storm) {
-      grad.addColorStop(0, '#232338');
-      grad.addColorStop(0.55, '#4a3a55');
+      grad.addColorStop(0, '#1d1d30');
+      grad.addColorStop(0.45, '#453452');
+      grad.addColorStop(0.75, '#6e4a52');
       grad.addColorStop(1, '#8a5a4a');
     } else {
-      grad.addColorStop(0, PALETTE.skyTop);
-      grad.addColorStop(0.55, PALETTE.skyMid);
-      grad.addColorStop(1, PALETTE.skyHorizon);
+      // Golden hour, five stops: deep indigo overhead melting through violet
+      // and rose into orange and gold at the horizon — never one flat band.
+      grad.addColorStop(0, '#241f4e');
+      grad.addColorStop(0.35, '#6b3f7a');
+      grad.addColorStop(0.6, '#b25a6e');
+      grad.addColorStop(0.82, '#ff8a3d');
+      grad.addColorStop(1, '#ffc46a');
     }
     context.fillStyle = grad;
     context.fillRect(0, 0, FIELD.width, FIELD.height * 0.62);
@@ -243,13 +310,22 @@ export function createRenderer(canvas, terrain) {
       if (!p) continue;
       const size = (cloud.size / p.depth) * 620;
       if (size < 4 || size > 900) continue;
-      const grad = context.createRadialGradient(p.x, p.y, 2, p.x, p.y, size);
-      grad.addColorStop(0, 'rgba(255, 217, 176, 0.5)');
-      grad.addColorStop(1, 'rgba(255, 217, 176, 0)');
-      context.fillStyle = grad;
-      context.beginPath();
-      context.ellipse(p.x, p.y, size, size * 0.42, 0, 0, Math.PI * 2);
-      context.fill();
+      // A cloud is a cluster, not one flat ellipse: a shaded underside
+      // below, a lit main puff, and two smaller puffs at the shoulders,
+      // so it reads as a volume catching the low sun.
+      const puff = (px, py, r, ry, alpha) => {
+        const grad = context.createRadialGradient(px, py, 2, px, py, r);
+        grad.addColorStop(0, `rgba(255, 217, 176, ${alpha})`);
+        grad.addColorStop(1, 'rgba(255, 217, 176, 0)');
+        context.fillStyle = grad;
+        context.beginPath();
+        context.ellipse(px, py, r, ry, 0, 0, Math.PI * 2);
+        context.fill();
+      };
+      puff(p.x, p.y + size * 0.2, size * 0.92, size * 0.34, 0.3);
+      puff(p.x - size * 0.48, p.y + size * 0.1, size * 0.55, size * 0.26, 0.5);
+      puff(p.x + size * 0.52, p.y + size * 0.08, size * 0.48, size * 0.24, 0.5);
+      puff(p.x, p.y, size, size * 0.42, 0.55);
     }
   }
 
@@ -315,20 +391,51 @@ export function createRenderer(canvas, terrain) {
       const rz = Math.sin(rad);
       const half = strip.length / 2;
       const hw = strip.width / 2;
-      const corners = [
-        [strip.x - fx * half - rx * hw, strip.z - fz * half - rz * hw],
-        [strip.x + fx * half - rx * hw, strip.z + fz * half - rz * hw],
-        [strip.x + fx * half + rx * hw, strip.z + fz * half + rz * hw],
-        [strip.x - fx * half + rx * hw, strip.z - fz * half + rz * hw],
-      ];
-      const pts = corners.map(([x, z]) => project(x, terrain.heightAt(x, z) + 0.8, z));
-      if (pts.some((p) => p === null)) continue;
-      context.fillStyle = PALETTE.runway;
-      context.beginPath();
-      context.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < 4; i += 1) context.lineTo(pts[i].x, pts[i].y);
-      context.closePath();
-      context.fill();
+      // The strip is painted in 24 m segments along its axis: a segment
+      // whose corner sits behind the camera is skipped, the rest still
+      // draws — the old whole-strip skip erased the runway whenever the
+      // camera sat past its near end (every title screen).
+      const segPoint = (along, across) => {
+        const x = strip.x + fx * along + rx * across;
+        const z = strip.z + fz * along + rz * across;
+        return project(x, terrain.heightAt(x, z) + 0.8, z);
+      };
+      const quad = (pts, fill) => {
+        if (pts.some((p) => p === null)) return;
+        context.fillStyle = fill;
+        context.beginPath();
+        context.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < 4; i += 1) context.lineTo(pts[i].x, pts[i].y);
+        context.closePath();
+        context.fill();
+      };
+      for (let d = -half; d < half; d += 24) {
+        const d2 = Math.min(d + 24, half);
+        quad(
+          [segPoint(d, -hw), segPoint(d2, -hw), segPoint(d2, hw), segPoint(d, hw)],
+          PALETTE.runway,
+        );
+        // Edge lines, inset from each long side.
+        quad(
+          [segPoint(d, -hw + 1.6), segPoint(d2, -hw + 1.6), segPoint(d2, -hw + 2.8), segPoint(d, -hw + 2.8)],
+          'rgba(242, 242, 232, 0.85)',
+        );
+        quad(
+          [segPoint(d, hw - 2.8), segPoint(d2, hw - 2.8), segPoint(d2, hw - 1.6), segPoint(d, hw - 1.6)],
+          'rgba(242, 242, 232, 0.85)',
+        );
+      }
+      // Threshold piano keys at both ends: four white bars across the width.
+      for (const end of [-half + 8, half - 8]) {
+        for (let k = 0; k < 4; k += 1) {
+          const a0 = -hw + 3 + (k * (hw * 2 - 6)) / 4;
+          const a1 = a0 + (hw * 2 - 6) / 4 - 2;
+          quad(
+            [segPoint(end - 4, a0), segPoint(end + 4, a0), segPoint(end + 4, a1), segPoint(end - 4, a1)],
+            'rgba(242, 242, 232, 0.9)',
+          );
+        }
+      }
       // Centreline dashes.
       context.fillStyle = PALETTE.runwayMark;
       for (let d = -half + 18; d < half - 10; d += 34) {
@@ -390,7 +497,9 @@ export function createRenderer(canvas, terrain) {
       context.closePath();
       context.stroke();
       if (isNext && showLabels) {
-        text('NEXT RING', p.x, p.y - 46, 15, PALETTE.ringNext, 'center');
+        // Above the ring, clear of the plane's propeller disc (the plane
+        // sprite sits on the ring's centre when threading it).
+        text('NEXT RING', p.x, p.y - 96, 15, PALETTE.ringNext, 'center');
       }
     }
   }
@@ -450,37 +559,54 @@ export function createRenderer(canvas, terrain) {
     }
   }
 
-  function drawPlane(plane, time, crashed) {
+  function drawPlane(plane, time, crashed, opts) {
     // A chase view from behind and above: the tail is near (bottom, wide),
     // the nose is far (top), the wings spread across the lower third.
+    // The plane is drawn BUILT: a shaded fuselage with spine highlight and
+    // panel seams, a wing with real thickness, struts and red tips, a
+    // visible fin, and a spinning propeller disc — no flat paper cutout.
     const cx = FIELD.width / 2;
-    const cy = FIELD.height * 0.62;
-    const scale = 1.35;
+    const cy = FIELD.height * 0.62 + (opts && opts.dy ? opts.dy : 0);
+    const scale = 1.5;
     context.save();
     context.translate(cx, cy);
     context.rotate(plane.bank * DEG * 0.55);
     context.scale(scale, scale);
     if (crashed) context.rotate(0.5);
-    // Propeller disc at the nose (far end): a thin wide ellipse, spinning blur.
+    // Propeller disc at the nose (far end): a proper spinning disc with
+    // radial blur streaks and a bright rim, not one thin ellipse.
     const propSpeed = 0.25 + plane.throttle * 0.75;
-    context.fillStyle = `rgba(220, 225, 235, ${0.14 + propSpeed * 0.12})`;
+    context.fillStyle = `rgba(220, 225, 235, ${0.1 + propSpeed * 0.1})`;
     context.beginPath();
-    context.ellipse(0, -72, 34, 8, 0, 0, Math.PI * 2);
+    context.ellipse(0, -72, 40, 10, 0, 0, Math.PI * 2);
     context.fill();
+    context.strokeStyle = `rgba(235, 238, 245, ${0.25 + propSpeed * 0.2})`;
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.ellipse(0, -72, 40, 10, 0, 0, Math.PI * 2);
+    context.stroke();
+    context.strokeStyle = `rgba(220, 225, 235, ${0.16 + propSpeed * 0.14})`;
+    context.lineWidth = 2.5;
+    for (let k = 0; k < 6; k += 1) {
+      const a = time * 9 + (k * Math.PI) / 3;
+      context.beginPath();
+      context.moveTo(Math.cos(a) * 8, -72 + Math.sin(a) * 2.5);
+      context.lineTo(Math.cos(a) * 38, -72 + Math.sin(a) * 9.5);
+      context.stroke();
+    }
     context.fillStyle = '#3a2c22';
     context.beginPath();
     context.arc(0, -72, 6, 0, Math.PI * 2);
     context.fill();
-    // Fin: rises from the tail toward the nose in the rear view.
-    context.fillStyle = '#c9503a';
+    // Tailplane with thickness: a darker underside copy first, then the top.
+    context.fillStyle = '#8a2f22';
     context.beginPath();
-    context.moveTo(-9, 30);
-    context.lineTo(9, 30);
-    context.lineTo(4, -6);
-    context.lineTo(-4, -6);
+    context.moveTo(-40, 31);
+    context.lineTo(40, 31);
+    context.lineTo(28, 43);
+    context.lineTo(-28, 43);
     context.closePath();
     context.fill();
-    // Tailplane.
     context.fillStyle = '#b8452f';
     context.beginPath();
     context.moveTo(-40, 26);
@@ -489,7 +615,33 @@ export function createRenderer(canvas, terrain) {
     context.lineTo(-28, 38);
     context.closePath();
     context.fill();
-    // High wing with dihedral, warm in the low sun.
+    context.strokeStyle = 'rgba(255, 200, 160, 0.5)';
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(-40, 26);
+    context.lineTo(40, 26);
+    context.stroke();
+    // High wing with dihedral, warm in the low sun — with thickness.
+    context.fillStyle = '#a87a18';
+    context.beginPath();
+    context.moveTo(-104, -9);
+    context.lineTo(-16, -21);
+    context.lineTo(16, -21);
+    context.lineTo(104, -9);
+    context.lineTo(96, 3);
+    context.lineTo(0, -7);
+    context.lineTo(-96, 3);
+    context.closePath();
+    context.fill();
+    // Wing struts: bush-plane spars from the lower fuselage to the wing.
+    context.strokeStyle = '#5a3a22';
+    context.lineWidth = 3.5;
+    context.beginPath();
+    context.moveTo(-13, 14);
+    context.lineTo(-66, -16);
+    context.moveTo(13, 14);
+    context.lineTo(66, -16);
+    context.stroke();
     context.fillStyle = '#e8b23a';
     context.beginPath();
     context.moveTo(-104, -14);
@@ -501,8 +653,41 @@ export function createRenderer(canvas, terrain) {
     context.lineTo(-96, -2);
     context.closePath();
     context.fill();
-    context.fillStyle = '#c98f1e';
-    context.fillRect(-104, -14, 208, 3);
+    // Spanwise sun highlight on the leading edge, red wingtips, root fairing.
+    context.fillStyle = '#f2c95c';
+    context.beginPath();
+    context.moveTo(-100, -14);
+    context.lineTo(-16, -25);
+    context.lineTo(16, -25);
+    context.lineTo(100, -14);
+    context.lineTo(96, -11);
+    context.lineTo(0, -21);
+    context.lineTo(-96, -11);
+    context.closePath();
+    context.fill();
+    context.fillStyle = '#c9503a';
+    context.beginPath();
+    context.moveTo(-104, -14);
+    context.lineTo(-88, -15);
+    context.lineTo(-88, -4);
+    context.lineTo(-96, -2);
+    context.closePath();
+    context.fill();
+    context.beginPath();
+    context.moveTo(104, -14);
+    context.lineTo(88, -15);
+    context.lineTo(88, -4);
+    context.lineTo(96, -2);
+    context.closePath();
+    context.fill();
+    context.fillStyle = '#d9a83c';
+    context.beginPath();
+    context.moveTo(-18, -26);
+    context.lineTo(18, -26);
+    context.lineTo(14, -10);
+    context.lineTo(-14, -10);
+    context.closePath();
+    context.fill();
     // Fuselage: a bush plane, cream above, red below, long in the rear view.
     const bodyGrad = context.createLinearGradient(0, -72, 0, 40);
     bodyGrad.addColorStop(0, '#f6ead2');
@@ -518,17 +703,85 @@ export function createRenderer(canvas, terrain) {
     context.quadraticCurveTo(-12, -50, 0, -74);
     context.closePath();
     context.fill();
-    // Cockpit windows with a glint of the sun.
-    context.fillStyle = '#1d2f45';
+    // Volume: a shaded crescent down the right side, a bright spine
+    // highlight up the middle, panel seams, and a red cheatline.
+    context.fillStyle = 'rgba(120, 40, 20, 0.2)';
     context.beginPath();
-    context.moveTo(-9, -52);
-    context.lineTo(9, -52);
-    context.lineTo(11, -30);
-    context.lineTo(-11, -30);
+    context.moveTo(7, -60);
+    context.quadraticCurveTo(13, -30, 13, 0);
+    context.quadraticCurveTo(12, 26, 7, 40);
+    context.quadraticCurveTo(10, 10, 9, -30);
     context.closePath();
     context.fill();
+    context.fillStyle = 'rgba(255, 244, 214, 0.35)';
+    context.beginPath();
+    context.moveTo(-2.5, -70);
+    context.quadraticCurveTo(1, -40, 2, -5);
+    context.quadraticCurveTo(2, 20, 0, 38);
+    context.lineTo(-2, 38);
+    context.quadraticCurveTo(-3, 10, -4, -30);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = 'rgba(90, 40, 20, 0.3)';
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(-13, -18);
+    context.quadraticCurveTo(0, -15, 13, -18);
+    context.moveTo(-14, 12);
+    context.quadraticCurveTo(0, 15, 14, 12);
+    context.stroke();
+    context.fillStyle = 'rgba(201, 80, 58, 0.85)';
+    context.beginPath();
+    context.moveTo(-13.5, -8);
+    context.lineTo(13.5, -8);
+    context.lineTo(13.8, -2);
+    context.lineTo(-13.8, -2);
+    context.closePath();
+    context.fill();
+    // Engine cowling ring around the nose.
+    context.strokeStyle = '#6b3a24';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.ellipse(0, -68, 13, 6, 0, 0, Math.PI * 2);
+    context.stroke();
+    // Cockpit windows with a frame divider and a glint of the sun.
+    context.fillStyle = '#1d2f45';
+    context.beginPath();
+    context.moveTo(-10, -54);
+    context.lineTo(10, -54);
+    context.lineTo(12, -28);
+    context.lineTo(-12, -28);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = 'rgba(246, 234, 210, 0.6)';
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(0, -53);
+    context.lineTo(0, -29);
+    context.stroke();
     context.fillStyle = 'rgba(255, 240, 200, 0.75)';
-    context.fillRect(-7, -50, 4, 14);
+    context.fillRect(-8, -52, 4, 18);
+    // Fin: the vertical stabilizer, drawn over the fuselage belly so it
+    // reads — darker red body, light leading edge, rudder seam.
+    context.fillStyle = '#a83a26';
+    context.beginPath();
+    context.moveTo(-7, 44);
+    context.lineTo(7, 44);
+    context.lineTo(4, -4);
+    context.lineTo(-4, -4);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = 'rgba(255, 200, 160, 0.55)';
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(-4, -4);
+    context.lineTo(-7, 44);
+    context.stroke();
+    context.strokeStyle = 'rgba(60, 20, 12, 0.4)';
+    context.beginPath();
+    context.moveTo(1, 0);
+    context.lineTo(3, 42);
+    context.stroke();
     // Navigation lights: red port, green starboard, blinking white tail.
     context.fillStyle = '#ff3b30';
     context.beginPath();
@@ -694,8 +947,8 @@ export function createRenderer(canvas, terrain) {
     context.stroke();
   }
 
-  function drawPanelScreen(title, lines, prompt, yShift) {
-    const width = 640;
+  function drawPanelScreen(title, lines, prompt, yShift, panelWidth) {
+    const width = panelWidth || 640;
     const maxText = width - 48;
     // Word-wrap each line to the panel width so long lines never spill
     // past the panel edge (the title text did exactly that).
@@ -736,7 +989,7 @@ export function createRenderer(canvas, terrain) {
   function draw(state, screen, best, time, dt) {
     const plane = state.plane;
     const storm = state.contract === 'storm' && screen === SCREEN_PLAY;
-    updateCamera(plane, dt || 0.016);
+    updateCamera(plane, dt || 0.016, screen);
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.fillStyle = '#0b0e1a';
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -749,7 +1002,14 @@ export function createRenderer(canvas, terrain) {
     drawRings(state, time, screen !== SCREEN_TITLE);
     drawSmoke(time);
     drawLighthouse(time, storm);
-    if (screen !== SCREEN_TITLE) drawPlane(plane, time, screen === SCREEN_OVER);
+    if (screen === SCREEN_TITLE) {
+      // The plane sits parked on the home runway below the panel, so the
+      // title screen finally shows an aircraft and a runway, not a menu
+      // floating over empty sea.
+      drawPlane(plane, time, false, { dy: 120 });
+    } else {
+      drawPlane(plane, time, screen === SCREEN_OVER);
+    }
     if (storm) drawRain(time);
     if (screen === SCREEN_TITLE) {
       drawPanelScreen('MERAPI AIRMAIL', [
@@ -757,21 +1017,20 @@ export function createRenderer(canvas, terrain) {
         '8 rings, 3 island strips, one tank of fuel.',
         'Pick a contract —',
         '[1] RING RUN   [2] AIRMAIL   [3] STORM RESCUE',
-        'Fly with ← → ↑ ↓ or A S D W, throttle with Shift / Ctrl,',
-        'mouse steers too.',
+        'Arrows / A S D W fly · Shift / Ctrl throttle',
         `Best score: ${best}`,
-      ], 'Press 1, 2 or 3 — or Space for the Ring Run');
+      ], 'Press 1, 2 or 3 — or Space for the Ring Run', -130, 560);
       return;
     }
     drawPanel(state, plane, best);
     drawHudTop(state, plane);
     if (screen === SCREEN_PAUSED) {
-      drawPanelScreen('Paused', ['The volcano will wait for you.'], 'Press P to resume');
+      drawPanelScreen('Paused', ['The volcano will wait for you.'], 'Press P to resume', -60);
     } else if (screen === SCREEN_OVER) {
       drawPanelScreen('Crashed', [
         state.crashReason || 'The plane came down.',
         `Score ${state.score}   •   Rings ${state.ringsPassed}/${state.ringsTotal}   •   Best ${best}`,
-      ], 'Press Space to fly again');
+      ], 'Press Space to fly again', -60);
     } else if (screen === SCREEN_WIN) {
       const winText = {
         rings: ['Ring Run complete!', 'All 8 rings threaded — and the tank held out.'],
@@ -781,7 +1040,7 @@ export function createRenderer(canvas, terrain) {
       drawPanelScreen(winText[0], [
         `Score ${state.score}   •   Rings ${state.ringsPassed}/${state.ringsTotal}   •   Best ${best}`,
         winText[1],
-      ], 'Press Space to fly again');
+      ], 'Press Space to fly again', -60);
     }
   }
 
