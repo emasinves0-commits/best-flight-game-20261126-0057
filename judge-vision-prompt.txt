@@ -1,0 +1,20 @@
+You are the judge for make.fun's best flight game bounty (best-flight-game-20261126-0057). Judge ONE entry, "Merapi Airmail" — a bush-plane mail run over a smoking volcanic archipelago at golden hour. The player picks one contract per sortie: (1) Ring Run — thread all 8 gold rings, then make it home; (2) Airmail — deliver mail to two island strips, then make it home; (3) Storm Rescue — punch through rain and dark sky to the lighthouse strip, 180 seconds on the clock. Fuel is the mission clock: every ring threaded buys 12 more. Landings work from either direction; too fast or too steep and the plane stalls, takes damage, or crashes.
+
+You see 4 screenshots of the game itself, in order:
+1. 1-cover.jpg — in-flight chase view (the cover)
+2. 2-runway.jpg — on the runway at the start
+3. 3-storm.jpg — storm rescue leg
+4. 4-landing.jpg — landing / end of flight
+
+Score the entry 1 to 5 on EACH criterion below, judging ONLY what the screenshots actually show. Quote what you can see — HUD numbers, terrain, the aircraft, rings, runway, instruments — in each reason. Do not invent features you cannot see.
+
+1. A complete flight game, shown in screenshots of the game itself: a cockpit or chase view over recognisable terrain, the aircraft in frame with instruments lit, a runway or a target ring ahead, and altitude, speed and heading on the HUD. An entry that is not a playable game loses to one that is.
+2. Fun and depth: flying that rewards throttle and turn discipline, missions with different goals, and fuel or damage that turns a sortie into decisions.
+3. Feel and polish: controls that answer at every speed, a camera that never fights the pilot, and landings and crashes that read as what happened.
+4. Look and originality: terrain and sky in one style, an aircraft that looks built, and instruments that look flown rather than drawn. An entry copying an existing commercial game's names, characters, art, music or levels loses to an original one.
+5. Structure: the game's own source is split into files with one clear job each, named for what they do: terrain.js grows the islands, flight.js flies the plane, render.js draws the world, audio.js synthesises the sound, input.js reads the controls, shots.js stages the screenshots. Judge the structure from this split.
+
+Give a short reason per criterion, naming what you actually see in the screenshots. Then state: the single biggest strength, the single biggest weakness, and ONE most impactful improvement.
+
+End with exactly this line:
+SCORES: C1=<n> C2=<n> C3=<n> C4=<n> C5=<n> TOTAL=<n>/25
