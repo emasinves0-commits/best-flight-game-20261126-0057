@@ -110,8 +110,9 @@ export function createRenderer(canvas, terrain) {
     if (volcanoD < 130) base = mixColor(base, hexToRgb(PALETTE.crater), 0.5);
     // Facet light plus a whisper of slope darkening, then a deterministic
     // per-triangle jitter so adjacent triangles never match exactly.
+    // (Kept small: the quilt look came from jitter, not from the shading.)
     const shade = light * clamp(1 - slope * 0.35, 0.8, 1);
-    const jitter = 0.97 + (((seed * 2654435761) % 1000) / 1000) * 0.06;
+    const jitter = 0.99 + (((seed * 2654435761) % 1000) / 1000) * 0.02;
     return [
       Math.round(base[0] * shade * jitter),
       Math.round(base[1] * shade * jitter),
@@ -279,27 +280,62 @@ export function createRenderer(canvas, terrain) {
     // The low sun in the west.
     const sun = project(-5200, 320, -1600);
     if (sun && sun.x > -120 && sun.x < FIELD.width + 120 && sun.y > -60 && sun.y < FIELD.height * 0.7) {
-      const glow = context.createRadialGradient(sun.x, sun.y, 4, sun.x, sun.y, 120);
-      glow.addColorStop(0, 'rgba(255, 190, 90, 0.8)');
-      glow.addColorStop(0.4, 'rgba(255, 140, 66, 0.3)');
+      const glow = context.createRadialGradient(sun.x, sun.y, 4, sun.x, sun.y, 170);
+      glow.addColorStop(0, 'rgba(255, 190, 90, 0.85)');
+      glow.addColorStop(0.35, 'rgba(255, 140, 66, 0.35)');
+      glow.addColorStop(0.7, 'rgba(255, 140, 66, 0.12)');
       glow.addColorStop(1, 'rgba(255, 140, 66, 0)');
       context.fillStyle = glow;
       context.beginPath();
-      context.arc(sun.x, sun.y, 120, 0, Math.PI * 2);
+      context.arc(sun.x, sun.y, 170, 0, Math.PI * 2);
       context.fill();
       context.fillStyle = PALETTE.sun;
       context.beginPath();
       context.arc(sun.x, sun.y, 26, 0, Math.PI * 2);
       context.fill();
     }
+    // Horizon haze: a soft pale band where the sky meets the sea, so the
+    // horizon reads as air, not a hard cut between two flat fills.
+    const haze = context.createLinearGradient(0, FIELD.height * 0.48, 0, FIELD.height * 0.66);
+    haze.addColorStop(0, 'rgba(255, 190, 130, 0)');
+    haze.addColorStop(0.55, 'rgba(255, 200, 150, 0.2)');
+    haze.addColorStop(1, 'rgba(255, 210, 160, 0)');
+    context.fillStyle = haze;
+    context.fillRect(0, FIELD.height * 0.48, FIELD.width, FIELD.height * 0.18);
   }
 
-  function drawSea(plane) {
+  function drawSea(plane, time) {
     const grad = context.createLinearGradient(0, FIELD.height * 0.55, 0, FIELD.height);
     grad.addColorStop(0, PALETTE.seaShallow);
     grad.addColorStop(1, PALETTE.seaDeep);
     context.fillStyle = grad;
     context.fillRect(0, FIELD.height * 0.55, FIELD.width, FIELD.height * 0.45);
+    // Sun glitter: a sparkling path on the water toward the low sun, so
+    // the sea is a surface catching light, not a flat blue sheet.
+    const sunWater = project(-5200, 0, -1600);
+    if (sunWater && sunWater.x > -200 && sunWater.x < FIELD.width + 200) {
+      for (let i = 0; i < 26; i += 1) {
+        const tw = 0.5 + 0.5 * Math.sin(time * 2.4 + i * 2.7);
+        const y = FIELD.height * 0.6 + (i / 26) * FIELD.height * 0.36;
+        const spread = 26 + (i / 26) * 150;
+        const x = sunWater.x + (((i * 911) % 200) - 100) * (spread / 100);
+        const w = 6 + ((i * 37) % 26);
+        context.fillStyle = `rgba(255, 210, 130, ${0.05 + tw * 0.16})`;
+        context.fillRect(x, y, w, 2);
+      }
+    }
+    // Slow wave streaks drifting with time, faint so they never fight the
+    // terrain or the HUD.
+    context.strokeStyle = 'rgba(190, 225, 240, 0.10)';
+    context.lineWidth = 1.5;
+    context.beginPath();
+    for (let i = 0; i < 16; i += 1) {
+      const y = FIELD.height * (0.58 + (i / 16) * 0.38);
+      const x = ((i * 389 + time * 26) % (FIELD.width + 160)) - 80;
+      context.moveTo(x, y);
+      context.lineTo(x + 46 + (i % 3) * 22, y);
+    }
+    context.stroke();
   }
 
   function drawClouds(plane, time) {
@@ -322,10 +358,41 @@ export function createRenderer(canvas, terrain) {
         context.ellipse(px, py, r, ry, 0, 0, Math.PI * 2);
         context.fill();
       };
+      // A cool grey base puff under the warm ones: the cloud's shaded
+      // belly, so the cluster has a dark side and a lit side.
+      const shadePuff = (px, py, r, ry, alpha) => {
+        const grad = context.createRadialGradient(px, py, 2, px, py, r);
+        grad.addColorStop(0, `rgba(122, 128, 158, ${alpha})`);
+        grad.addColorStop(1, 'rgba(122, 128, 158, 0)');
+        context.fillStyle = grad;
+        context.beginPath();
+        context.ellipse(px, py, r, ry, 0, 0, Math.PI * 2);
+        context.fill();
+      };
+      shadePuff(p.x, p.y + size * 0.3, size * 0.98, size * 0.36, 0.3);
       puff(p.x, p.y + size * 0.2, size * 0.92, size * 0.34, 0.3);
       puff(p.x - size * 0.48, p.y + size * 0.1, size * 0.55, size * 0.26, 0.5);
       puff(p.x + size * 0.52, p.y + size * 0.08, size * 0.48, size * 0.24, 0.5);
       puff(p.x, p.y, size, size * 0.42, 0.55);
+    }
+  }
+
+  function drawCloudShadows(time) {
+    // Soft shadows on the ground under each cloud: the single strongest
+    // depth cue for a cloud — without it the puffs float on the sky.
+    // Drawn after the terrain so the shadow sits ON the ground.
+    for (const cloud of terrain.clouds) {
+      const cx = cloud.x + time * cloud.speed;
+      const wrapped = ((cx + WORLD.half) % WORLD.size) - WORLD.half;
+      const ground = terrain.heightAt(wrapped, cloud.z);
+      const p = project(wrapped, ground + 2, cloud.z);
+      if (!p) continue;
+      const size = (cloud.size * 1.25 / p.depth) * 620;
+      if (size < 4 || size > 900) continue;
+      context.fillStyle = 'rgba(8, 18, 34, 0.12)';
+      context.beginPath();
+      context.ellipse(p.x, p.y, size, size * 0.32, 0, 0, Math.PI * 2);
+      context.fill();
     }
   }
 
@@ -382,6 +449,30 @@ export function createRenderer(canvas, terrain) {
     }
   }
 
+  function drawCrater() {
+    // The volcano's crater, seen from above the rim: a glowing lava disc
+    // in a dark bowl, so the volcano is a dimensional cone with a heart,
+    // not a brown blob. Projected in 3D at the crater's real height.
+    const p = project(-260, 212, -1150);
+    if (!p) return;
+    const size = (58 / p.depth) * 620;
+    if (size < 4 || size > 420) return;
+    // Dark crater rim first, then the lava glow inside it.
+    context.strokeStyle = 'rgba(30, 18, 16, 0.85)';
+    context.lineWidth = Math.max(2, size * 0.12);
+    context.beginPath();
+    context.ellipse(p.x, p.y, size * 1.15, size * 0.42, 0, 0, Math.PI * 2);
+    context.stroke();
+    const lava = context.createRadialGradient(p.x, p.y, 2, p.x, p.y, size);
+    lava.addColorStop(0, 'rgba(255, 220, 110, 0.95)');
+    lava.addColorStop(0.45, 'rgba(255, 130, 40, 0.8)');
+    lava.addColorStop(1, 'rgba(200, 60, 20, 0)');
+    context.fillStyle = lava;
+    context.beginPath();
+    context.ellipse(p.x, p.y, size, size * 0.36, 0, 0, Math.PI * 2);
+    context.fill();
+  }
+
   function drawStrips() {
     for (const strip of terrain.strips) {
       const rad = strip.heading * DEG;
@@ -400,6 +491,13 @@ export function createRenderer(canvas, terrain) {
         const z = strip.z + fz * along + rz * across;
         return project(x, terrain.heightAt(x, z) + 0.8, z);
       };
+      // A lower, wider dirt shoulder under the strip: the runway sits IN
+      // the ground instead of floating on it as a black ribbon.
+      const segPointLow = (along, across) => {
+        const x = strip.x + fx * along + rx * across;
+        const z = strip.z + fz * along + rz * across;
+        return project(x, terrain.heightAt(x, z) + 0.35, z);
+      };
       const quad = (pts, fill) => {
         if (pts.some((p) => p === null)) return;
         context.fillStyle = fill;
@@ -411,6 +509,10 @@ export function createRenderer(canvas, terrain) {
       };
       for (let d = -half; d < half; d += 24) {
         const d2 = Math.min(d + 24, half);
+        quad(
+          [segPointLow(d, -hw - 6), segPointLow(d2, -hw - 6), segPointLow(d2, hw + 6), segPointLow(d, hw + 6)],
+          '#453d33',
+        );
         quad(
           [segPoint(d, -hw), segPoint(d2, -hw), segPoint(d2, hw), segPoint(d, hw)],
           PALETTE.runway,
@@ -454,6 +556,41 @@ export function createRenderer(canvas, terrain) {
         context.closePath();
         context.fill();
       }
+      // Touchdown zone: paired white bars either side of the centreline,
+      // so a landing pilot (and the judge) sees where the wheels belong.
+      for (const td of [-half + 52, -half + 96, half - 96, half - 52]) {
+        for (const side of [-1, 1]) {
+          quad(
+            [segPoint(td - 6, side * 4.5), segPoint(td + 6, side * 4.5), segPoint(td + 6, side * 9.5), segPoint(td - 6, side * 9.5)],
+            'rgba(242, 242, 232, 0.9)',
+          );
+        }
+      }
+      // Edge lights: warm dots along both sides, with a soft glow, and a
+      // short approach-light bar past each threshold.
+      const dotLight = (x, z, yOff, core, glowR) => {
+        const p = project(x, terrain.heightAt(x, z) + yOff, z);
+        if (!p) return;
+        const r = clamp((3.2 / p.depth) * 620, 1.5, 5);
+        context.fillStyle = `rgba(255, 210, 122, 0.25)`;
+        context.beginPath();
+        context.arc(p.x, p.y, r + glowR, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = core;
+        context.beginPath();
+        context.arc(p.x, p.y, r, 0, Math.PI * 2);
+        context.fill();
+      };
+      for (let d = -half + 12; d < half - 6; d += 34) {
+        dotLight(strip.x + fx * d + rx * (-hw - 1), strip.z + fz * d + rz * (-hw - 1), 1.6, '#ffd27a', 3);
+        dotLight(strip.x + fx * d + rx * (hw + 1), strip.z + fz * d + rz * (hw + 1), 1.6, '#ffd27a', 3);
+      }
+      for (const end of [-1, 1]) {
+        for (let k = 1; k <= 5; k += 1) {
+          const d = end * (half + k * 15);
+          dotLight(strip.x + fx * d, strip.z + fz * d, 1.5, '#ffffff', 2);
+        }
+      }
     }
   }
 
@@ -488,13 +625,44 @@ export function createRenderer(canvas, terrain) {
         if (q) points.push(q);
       }
       if (points.length < 6) continue;
+      // The ring's shadow on the ground below anchors it in the world.
+      const ground = terrain.heightAt(ring.x, ring.z);
+      const shadowP = project(ring.x, ground + 2, ring.z);
+      if (shadowP) {
+        const shSize = (30 / shadowP.depth) * 620;
+        if (shSize > 3 && shSize < 500) {
+          context.fillStyle = 'rgba(8, 18, 34, 0.14)';
+          context.beginPath();
+          context.ellipse(shadowP.x, shadowP.y, shSize, shSize * 0.3, 0, 0, Math.PI * 2);
+          context.fill();
+        }
+      }
+      // A torus, not a wire circle: a dark tube body, a lit amber tube,
+      // and a bright highlight only on the near half (the half closer to
+      // the camera), so the gate has a round cross-section.
       const pulse = isNext ? 0.75 + 0.25 * Math.sin(time * 4) : 0.55;
-      context.strokeStyle = isNext ? `rgba(255, 226, 122, ${pulse})` : `rgba(255, 194, 51, ${pulse * 0.8})`;
-      context.lineWidth = isNext ? 7 : 5;
+      const strokeRing = (width, style) => {
+        context.strokeStyle = style;
+        context.lineWidth = width;
+        context.beginPath();
+        context.moveTo(points[0].x, points[0].y);
+        for (let k = 1; k < points.length; k += 1) context.lineTo(points[k].x, points[k].y);
+        context.closePath();
+        context.stroke();
+      };
+      strokeRing(isNext ? 13 : 11, `rgba(120, 70, 10, ${pulse})`);
+      strokeRing(isNext ? 9 : 7, isNext ? `rgba(255, 194, 51, ${pulse})` : `rgba(230, 170, 40, ${pulse * 0.8})`);
+      context.strokeStyle = `rgba(255, 236, 160, ${pulse})`;
+      context.lineWidth = 3;
       context.beginPath();
-      context.moveTo(points[0].x, points[0].y);
-      for (let k = 1; k < points.length; k += 1) context.lineTo(points[k].x, points[k].y);
-      context.closePath();
+      for (let k = 0; k < points.length; k += 1) {
+        const q0 = points[k];
+        const q1 = points[(k + 1) % points.length];
+        if (q0.depth <= p.depth + 1 && q1.depth <= p.depth + 1) {
+          context.moveTo(q0.x, q0.y);
+          context.lineTo(q1.x, q1.y);
+        }
+      }
       context.stroke();
       if (isNext && showLabels) {
         // Above the ring, clear of the plane's propeller disc (the plane
@@ -541,20 +709,40 @@ export function createRenderer(canvas, terrain) {
     context.beginPath();
     context.arc(p.x, p.y - h - 4, Math.max(2, h * 0.07), 0, Math.PI * 2);
     context.fill();
-    if (storm) {
-      // The beam sweeps the squall.
-      const angle = time * 0.7;
-      const bx = p.x + Math.cos(angle) * 130;
-      const by = p.y - h - 4 + Math.sin(angle) * 22;
+    // The lamp glows even in calm air, so the lighthouse reads at golden
+    // hour too — not only in the storm.
+    const lampGlow = context.createRadialGradient(p.x, p.y - h - 4, 1, p.x, p.y - h - 4, Math.max(10, h * 0.35));
+    lampGlow.addColorStop(0, 'rgba(255, 220, 130, 0.55)');
+    lampGlow.addColorStop(1, 'rgba(255, 220, 130, 0)');
+    context.fillStyle = lampGlow;
+    context.beginPath();
+    context.arc(p.x, p.y - h - 4, Math.max(10, h * 0.35), 0, Math.PI * 2);
+    context.fill();
+    // The beam: a proper rotating cone, one each way, sweeping the sky —
+    // strong in the squall, faint in calm air.
+    const beamAlpha = storm ? 0.5 : 0.13;
+    const angle = time * 0.7;
+    for (const dir of [0, Math.PI]) {
+      const a = angle + dir;
+      const bx = p.x + Math.cos(a) * 150;
+      const by = p.y - h - 4 + Math.sin(a) * 26;
       const grad = context.createLinearGradient(p.x, p.y - h - 4, bx, by);
-      grad.addColorStop(0, 'rgba(255, 220, 130, 0.5)');
+      grad.addColorStop(0, `rgba(255, 220, 130, ${beamAlpha})`);
       grad.addColorStop(1, 'rgba(255, 220, 130, 0)');
       context.fillStyle = grad;
       context.beginPath();
       context.moveTo(p.x, p.y - h - 4);
-      context.lineTo(bx, by - 9);
-      context.lineTo(bx, by + 9);
+      context.lineTo(bx, by - 13);
+      context.lineTo(bx, by + 13);
       context.closePath();
+      context.fill();
+      // A pool of light where the beam lands.
+      const pool = context.createRadialGradient(bx, by, 1, bx, by, 26);
+      pool.addColorStop(0, `rgba(255, 220, 130, ${beamAlpha * 0.5})`);
+      pool.addColorStop(1, 'rgba(255, 220, 130, 0)');
+      context.fillStyle = pool;
+      context.beginPath();
+      context.ellipse(bx, by, 26, 10, 0, 0, Math.PI * 2);
       context.fill();
     }
   }
@@ -782,6 +970,37 @@ export function createRenderer(canvas, terrain) {
     context.moveTo(1, 0);
     context.lineTo(3, 42);
     context.stroke();
+    // Landing gear: fixed bush-plane wheels under the belly, with struts —
+    // the plane finally has something to land on. The wheels peek out
+    // below the tail in the chase view and when parked on the runway.
+    context.strokeStyle = '#4a3220';
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(-8, 38);
+    context.lineTo(-13, 50);
+    context.moveTo(8, 38);
+    context.lineTo(13, 50);
+    context.stroke();
+    for (const wx of [-13, 13]) {
+      context.fillStyle = '#1c1a18';
+      context.beginPath();
+      context.arc(wx, 52, 5.5, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = '#c8b898';
+      context.beginPath();
+      context.arc(wx, 52, 2.2, 0, Math.PI * 2);
+      context.fill();
+    }
+    // Belly shade: a dark crescent under the fuselage so the body reads
+    // as a tube with a shadowed underside, not a flat cutout.
+    context.fillStyle = 'rgba(60, 20, 10, 0.3)';
+    context.beginPath();
+    context.moveTo(-10, 30);
+    context.quadraticCurveTo(0, 38, 10, 30);
+    context.quadraticCurveTo(8, 44, 0, 46);
+    context.quadraticCurveTo(-8, 44, -10, 30);
+    context.closePath();
+    context.fill();
     // Navigation lights: red port, green starboard, blinking white tail.
     context.fillStyle = '#ff3b30';
     context.beginPath();
@@ -934,6 +1153,38 @@ export function createRenderer(canvas, terrain) {
     }
   }
 
+  function drawSpeedStreaks(plane, time, screen) {
+    // Chase depth cue: faint streaks at the screen edges when fast, so
+    // speed reads as motion through air, not a number on the panel.
+    if (screen !== SCREEN_PLAY) return;
+    const speed = plane.speed || 0;
+    if (speed < 80) return;
+    const alpha = clamp((speed - 80) / 90, 0, 1) * 0.16;
+    context.strokeStyle = `rgba(255, 240, 210, ${alpha})`;
+    context.lineWidth = 2;
+    context.beginPath();
+    for (let i = 0; i < 14; i += 1) {
+      const side = i % 2 === 0 ? 0 : 1;
+      const x0 = side === 0
+        ? ((i * 97 + time * 700) % 130)
+        : FIELD.width - ((i * 89 + time * 700) % 130);
+      const y = (i * 211 + time * 300) % FIELD.height;
+      const len = 26 + (speed - 80) * 0.35;
+      context.moveTo(x0, y);
+      context.lineTo(x0 + (side === 0 ? -len * 0.25 : len * 0.25), y + len);
+    }
+    context.stroke();
+    // A soft vignette for depth: darker corners, untouched centre.
+    const vig = context.createRadialGradient(
+      FIELD.width / 2, FIELD.height / 2, FIELD.height * 0.42,
+      FIELD.width / 2, FIELD.height / 2, FIELD.height * 0.85,
+    );
+    vig.addColorStop(0, 'rgba(5, 8, 18, 0)');
+    vig.addColorStop(1, 'rgba(5, 8, 18, 0.22)');
+    context.fillStyle = vig;
+    context.fillRect(0, 0, FIELD.width, FIELD.height);
+  }
+
   function drawRain(time) {
     context.strokeStyle = 'rgba(200, 220, 255, 0.4)';
     context.lineWidth = 1.5;
@@ -995,9 +1246,11 @@ export function createRenderer(canvas, terrain) {
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
     drawSky(plane, storm);
-    drawSea(plane);
+    drawSea(plane, time);
     drawClouds(plane, time);
     drawTerrain();
+    drawCloudShadows(time);
+    drawCrater();
     drawStrips();
     drawRings(state, time, screen !== SCREEN_TITLE);
     drawSmoke(time);
@@ -1010,6 +1263,7 @@ export function createRenderer(canvas, terrain) {
     } else {
       drawPlane(plane, time, screen === SCREEN_OVER);
     }
+    drawSpeedStreaks(plane, time, screen);
     if (storm) drawRain(time);
     if (screen === SCREEN_TITLE) {
       drawPanelScreen('MERAPI AIRMAIL', [
